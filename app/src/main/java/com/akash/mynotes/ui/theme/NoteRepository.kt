@@ -1,21 +1,34 @@
 package com.akash.mynotes
 
 import android.content.Context
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
+import android.widget.Toast
+import com.akash.mynotes.models.Note
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.Json.Default.decodeFromString
 
 class NoteRepository(private val context: Context) {
-    private val gson = Gson()
     private val sharedPreferences = context.getSharedPreferences("notes", Context.MODE_PRIVATE)
 
     fun saveNotes(notes: List<Note>) {
-        val jsonString = gson.toJson(notes)
-        sharedPreferences.edit().putString("notes", jsonString).apply()
+        sharedPreferences.edit().putString(
+            "notes",
+            Json.encodeToString(notes)
+        ).apply()
     }
 
     fun loadNotes(): MutableList<Note> {
-        val jsonString = sharedPreferences.getString("notes", null) ?: return mutableListOf()
-        val type = object : TypeToken<List<Note>>() {}.type
-        return gson.fromJson(jsonString, type)
+        var data = mutableListOf<Note>()
+        try {
+            val jsonString = sharedPreferences.getString("notes", null) ?: return mutableListOf()
+            data = decodeFromString(string = jsonString)
+        }catch (e: Exception){
+            Toast.makeText(
+                context,
+                e.message,
+                Toast.LENGTH_LONG
+            ).show()
+        }
+        return data;
     }
 }

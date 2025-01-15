@@ -1,6 +1,5 @@
 package com.akash.mynotes
 
-import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
@@ -11,7 +10,6 @@ import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
 import android.view.View
-import android.view.View.resolveSize
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Toast
@@ -26,13 +24,19 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,14 +46,12 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.akash.mynotes.models.Note
 import com.akash.mynotes.ui.theme.MyNotesTheme
 import java.util.UUID
-import com.akash.mynotes.saveNotes
-import com.akash.mynotes.loadNotes
 
 
 class MainActivity : ComponentActivity() {
@@ -58,7 +60,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var windowManager: WindowManager
     private lateinit var params: WindowManager.LayoutParams
     private var isPopupVisible by mutableStateOf(false)
-    private var currentNote by mutableStateOf(Note(UUID.randomUUID(), "", ""))
+    private var currentNote: Note? by mutableStateOf(null)
 
     private var floatingNote: Note? = null
 
@@ -69,10 +71,12 @@ class MainActivity : ComponentActivity() {
 
         // Check and request overlay permission
         if (!Settings.canDrawOverlays(this)) {
-            val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+            val intent =
+                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
             ContextCompat.startActivity(this, intent, null)
         }
 
+        val noteRepository = NoteRepository(this)
         setContent {
             MyNotesTheme {
                 Scaffold(
@@ -80,37 +84,45 @@ class MainActivity : ComponentActivity() {
                         TopAppBar(title = { Text("Notes") })
                     },
                     floatingActionButton = {
-                        FloatingActionButton(onClick = { currentNote = Note(UUID.randomUUID(), "", "") }) {
-                            Icon(Icons.Filled.Add, "add note")
+                        NotesActionButton() {
+                            currentNote = null
                         }
                     },
                     modifier = Modifier.fillMaxSize()
                 ) { paddingValues ->
                     MainScreen(
-                        modifier = Modifier.padding(paddingValues),
-                        onNoteOpened = { note -> currentNote = note },
-                        saveNote = { note -> saveNote(note) }
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(paddingValues),
+                        noteRepository
                     )
 
-                    if (currentNote.id != UUID.randomUUID()) {
+                    if (currentNote == null) {
                         EditNoteDialog(
-                            note = currentNote,
-                            onDismiss = { currentNote = Note(UUID.randomUUID(), "", "") },
-                            onSave = { currentNote = it }
+                            anote = currentNote,
+                            onDismiss = { currentNote = null },
+                            onSave = {
+                                currentNote = it
+                                var notes = noteRepository.loadNotes()
+                                notes.add(currentNote!!)
+                                noteRepository.saveNotes(
+                                    notes
+                                )
+                            }
                         )
                     }
                 }
 
-                if (isPopupVisible) {
-                    FloatingNote(
-                        activity = this,
-                        onClose = {
-                            if (floatingNote != null) {
-                                saveNote(floatingNote!!)
-                            }
-                        }
-                    )
-                }
+//                if (isPopupVisible) {
+//                    FloatingNote(
+//                        activity = this,
+//                        onClose = {
+//                            if (floatingNote != null) {
+//                                saveNote(floatingNote!!)
+//                            }
+//                        }
+//                    )
+//                }
             }
         }
     }
@@ -177,22 +189,6 @@ class MainActivity : ComponentActivity() {
         isPopupVisible = false
     }
 
-    private fun saveNote(note: Note) {
-        Log.d("MainActivity", "saveNote: $note")
-        val updatedNotes = loadNotes(this).toMutableList()
-        val found = updatedNotes.find { it.id == note.id }
-
-        if (found == null) {
-            updatedNotes.add(note)
-            Log.d("MainActivity", "saveNote: added new note $note")
-        } else {
-            updatedNotes[updatedNotes.indexOf(found)] = note
-            Log.d("MainActivity", "saveNote: updated existing note $note")
-        }
-
-        saveNotes(this, updatedNotes)
-    }
-
     @Composable
     fun FloatingNote(activity: MainActivity, onClose: () -> Unit) {
         var isTransparent by remember { mutableStateOf(false) }
@@ -203,7 +199,10 @@ class MainActivity : ComponentActivity() {
             modifier = Modifier
                 .fillMaxWidth()
                 .let { if (isMaximized) it.fillMaxSize() else it.wrapContentSize() }
-                .background(if (isSystemInDarkTheme()) Color(0xFF424242) else Color.White, RoundedCornerShape(8.dp))
+                .background(
+                    if (isSystemInDarkTheme()) Color(0xFF424242) else Color.White,
+                    RoundedCornerShape(8.dp)
+                )
                 .alpha(if (isTransparent) 0.6f else 1f)
                 .clickable { isTransparent = !isTransparent }
         ) {
@@ -213,10 +212,17 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("Floating Note", fontWeight = FontWeight.Bold, style = TextStyle(fontSize = 14.sp))
+                    Text(
+                        "Floating Note",
+                        fontWeight = FontWeight.Bold,
+                        style = TextStyle(fontSize = 14.sp)
+                    )
                     Row {
                         IconButton(onClick = { isMaximized = !isMaximized }) {
-                            Icon(if (isMaximized) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowUp, "Maximize note")
+                            Icon(
+                                if (isMaximized) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowUp,
+                                "Maximize note"
+                            )
                         }
 
                         IconButton(onClick = { onClose() }) {
@@ -282,50 +288,71 @@ class ComposePopupView(context: Context) : ViewGroup(context) {
 
 // MainScreen.kt for listing of notes
 @Composable
-fun MainScreen(modifier: Modifier = Modifier, onNoteOpened: (Note) -> Unit, saveNote: (Note) -> Unit) {
+fun MainScreen(
+    modifier: Modifier = Modifier,
+    noteRepository: NoteRepository
+) {
     val context = LocalContext.current
-    var notes by rememberSaveable { mutableStateOf(loadNotes(context)) }
+    val notes = noteRepository.loadNotes()
 
-    fun deleteNote(note: Note) {
-        notes = notes.filter { it.id != note.id }.toMutableList()
-        saveNotes(context, notes)
-    }
 
-    Column(modifier = modifier.fillMaxSize().padding(16.dp)) {
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
         if (notes.isEmpty()) {
             Text("No notes found. Add some notes.")
         }
 
         LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(items = notes) { note ->
-                NoteItem(note = note, onDelete = { deleteNote(note) }, onEdit = { onNoteOpened(note) })
+            items(notes) { nnote ->
+                NoteItem(
+                    nnote,
+                    onSave = {
+                        noteRepository.saveNotes(notes)
+                    },
+                    onDelete = {
+                        noteRepository.saveNotes(
+                            notes.filter { it.title != nnote.title }
+                        )
+                    }
+                )
             }
         }
-    }
-
-    LaunchedEffect(notes) {
-        saveNotes(context, notes)
     }
 }
 
 @Composable
-fun NoteItem(note: Note, onDelete: (Note) -> Unit, onEdit: (Note) -> Unit) {
+fun NoteItem(
+    note: Note,
+    onDelete: (Note) -> Unit,
+    onSave: (Note) -> Unit
+) {
     var isExpanded by remember { mutableStateOf(false) }
 
-    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp).clickable { isExpanded = !isExpanded }) {
+    Card(modifier = Modifier
+        .fillMaxWidth()
+        .padding(vertical = 8.dp)
+        .clickable { isExpanded = !isExpanded }
+    ) {
         Column(modifier = Modifier.padding(8.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(note.title.take(20) + (if (note.title.length > 20) "..." else ""), style = TextStyle(fontWeight = FontWeight.SemiBold))
+                Text(
+                    note.title.take(20) + (if (note.title.length > 20) "..." else ""),
+                    style = TextStyle(fontWeight = FontWeight.SemiBold)
+                )
                 Row {
-                    IconButton(onClick = { onEdit(note) }) {
-                        Icon(Icons.Default.Add, "edit note")
+                    IconButton(onClick = { onSave(note) }) {
+                        Icon(Icons.Default.Done, "Save Note")
                     }
                     IconButton(onClick = { onDelete(note) }) {
-                        Icon(Icons.Default.Delete, "delete note")
+                        Icon(Icons.Default.Delete, "Delete Note")
                     }
                 }
             }
@@ -336,67 +363,8 @@ fun NoteItem(note: Note, onDelete: (Note) -> Unit, onEdit: (Note) -> Unit) {
     }
 }
 
-@Composable
-fun EditNoteDialog(note: Note, onDismiss: () -> Unit, onSave: (Note) -> Unit) {
-    var currentNoteTitle by remember { mutableStateOf(note.title) }
-    var currentNoteText by remember { mutableStateOf(note.text) }
-    val context = LocalContext.current
 
-    AlertDialog(
-        onDismissRequest = { onDismiss() },
-        title = { Text("Edit Note") },
-        text = {
-            Column {
-                TextField(value = currentNoteTitle, onValueChange = { currentNoteTitle = it }, label = { Text("Title") })
-                TextField(value = currentNoteText, onValueChange = { currentNoteText = it }, label = { Text("Note") })
-            }
-        },
-        confirmButton = {
-            Button(onClick = {
-                onSave(note.copy(title = currentNoteTitle, text = currentNoteText))
-                onDismiss()
-            }) {
-                Text("Save")
-            }
-        },
-        dismissButton = {
-            OutlinedButton(onClick = { onDismiss() }) {
-                Text("Cancel")
-            }
-        }
-    )
-}
 
-// Model
-data class Note(
-    val id: UUID,
-    val title: String,
-    val text: String
-)
 
-// Shared preferences helper functions
-fun saveNotes(context: Context, notes: List<Note>) {
-    val sharedPreferences = context.getSharedPreferences("notes", Context.MODE_PRIVATE)
-    val jsonString = notes.joinToString("\n") { "${it.id},${it.title},${it.text}" }
-    with(sharedPreferences.edit()) {
-        putString("notes", jsonString)
-        apply()
-    }
-}
 
-fun loadNotes(context: Context): MutableList<Note> {
-    val sharedPreferences = context.getSharedPreferences("notes", Context.MODE_PRIVATE)
-    val jsonString = sharedPreferences.getString("notes", "") ?: ""
-    return if (jsonString.isEmpty()) mutableListOf() else jsonString.split("\n").map {
-        val parts = it.split(",")
-        Note(UUID.fromString(parts[0]), parts[1], parts[2])
-    }.toMutableList()
-}
 
-@Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-    MyNotesTheme {
-        // Your preview content
-    }
-}
